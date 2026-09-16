@@ -19,6 +19,12 @@
     "rootDir": ".",
     "outDir": "./dist"
   },
-  "include": ["src/**/*.ts", "index.ts", "tsdown.config.ts", "idl/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "index.ts",
+    "tsdown.config.ts",
+    "idl/**/*.ts",
+    "test/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

@@ -78,6 +78,7 @@ export class EthereumMonitor {
         try {
           const { output, rawOutput } = await this.extractTransactionOutput(
             tx,
+            receipt,
             provider,
             outputDeserializationSchema
           );
@@ -216,8 +217,74 @@ export class EthereumMonitor {
     return callFrame?.output ?? '0x';
   }
 
+  /**
+   * LOCAL PATCH (project 00034, Q62 Option C). The mined call's return data
+   * when the RPC has no debug namespace (e.g. Alchemy's free tier rejects
+   * debug_traceTransaction): replay the mined transaction with eth_call
+   * (same from/to/data/value) against the state at the mined block's
+   * PARENT and take its return data. The receipt's status is the
+   * authoritative success flag and is checked by the caller first.
+   *
+   * Demo-grade caveat: this is NOT byte-identical to the MPC's method. An
+   * eth_call replay reads pre-block state, so a call whose result depends
+   * on writes earlier in the same block (or on the exact position in the
+   * block) can return different data than the mined trace would. For a
+   * single ERC20 transfer from an address nothing else touches the two
+   * agree. Prefer a traced RPC when one exists: the trace path stays the
+   * first choice and this code is never reached on anvil/geth/reth.
+   */
+  private static async replayCallOutput(
+    tx: ethers.TransactionResponse,
+    receipt: ethers.TransactionReceipt,
+    provider: ethers.JsonRpcProvider
+  ): Promise<string> {
+    if (receipt.status !== 1) {
+      // The caller already reports a status-0 receipt as 'reverted' before
+      // asking for the output; keep the same verdict here rather than
+      // fabricating return data for a failed call.
+      throw new Error(
+        `eth_call replay fallback: tx ${tx.hash} has receipt status ${String(
+          receipt.status
+        )} (reverted), no return data to recover`
+      );
+    }
+    const blockTag = receipt.blockNumber - 1;
+    console.warn(
+      `⚠️  EthereumMonitor: EVM_RPC_URL does not support debug_traceTransaction; recovering the output of ${tx.hash} by eth_call replay at block ${blockTag} (parent of ${receipt.blockNumber}). Local 00034 patch, demo-grade: reads pre-block state, not the mined trace.`
+    );
+    return provider.call({
+      from: tx.from,
+      to: tx.to,
+      data: tx.data,
+      value: tx.value,
+      blockTag,
+    });
+  }
+
+  /**
+   * The top call's return data: the MPC's trace first, the eth_call replay
+   * only when the RPC reports that debug_traceTransaction itself is
+   * missing or unsupported. Any other trace failure is rethrown unchanged
+   * so the caller's retry/cap logic is untouched.
+   */
+  private static async topCallOutput(
+    tx: ethers.TransactionResponse,
+    receipt: ethers.TransactionReceipt,
+    provider: ethers.JsonRpcProvider
+  ): Promise<string> {
+    try {
+      return await this.traceTopCallOutput(tx.hash, provider);
+    } catch (error) {
+      if (!this.isMethodNotSupportedError(error)) {
+        throw error;
+      }
+      return this.replayCallOutput(tx, receipt, provider);
+    }
+  }
+
   private static async extractTransactionOutput(
     tx: ethers.TransactionResponse,
+    receipt: ethers.TransactionReceipt,
     provider: ethers.JsonRpcProvider,
     outputDeserializationSchema: Buffer | number[]
   ): Promise<{ output: TransactionOutput; rawOutput: string }> {
@@ -229,8 +296,10 @@ export class EthereumMonitor {
     // 'trace_output' bytes in
     // github.com/sig-net/mpc/chain-signatures/chain-ethereum/src/indexer.rs:280.
     // Same method as the MPC (debug_traceTransaction, callTracer, top call
-    // only), so this is the mined call's ACTUAL return data.
-    const rawOutput = await this.traceTopCallOutput(tx.hash, provider);
+    // only), so this is the mined call's ACTUAL return data. Local 00034
+    // patch: when the RPC lacks debug_traceTransaction, fall back to an
+    // eth_call replay of the mined tx (see replayCallOutput for the caveat).
+    const rawOutput = await this.topCallOutput(tx, receipt, provider);
 
     // This is the Ethereum monitor, so the output deserialisation format is
     // always ABI: the MPC hardcodes it as OUTPUT_DESERIALIZATION_FORMAT in
