@@ -127,6 +127,13 @@ export interface MidnightMonitorConfig {
    * Defaults to genesis account seed.
    */
   responderWalletSeed?: string;
+
+  /**
+   * Caller contract addresses this responder serves, lowercase and without a
+   * `0x` prefix. Undefined or empty = serve every caller (upstream
+   * behaviour). See {@link ServerConfig.midnightCallerAllowlist}.
+   */
+  callerAllowlist?: readonly string[];
 }
 
 /** The responder's live wallet: its key material plus a started-and-synced facade. */
@@ -163,6 +170,13 @@ export class MidnightMonitor {
   // Root of the per-contract response key derivation.
   private mpcRootKeyBytes: Uint8Array | null = null;
 
+  // The allow-list, normalised once. Empty set = no filtering.
+  private readonly allowedCallers: ReadonlySet<string>;
+
+  // Caller addresses already refused, so the "ignoring" line is logged once
+  // each rather than on every poll cycle.
+  private readonly refusedCallers = new Set<string>();
+
   // Serializes ALL signet contract writes. Two concurrent callTx.* calls
   // deadlock the shared single-writer LevelDB private-state store, and the two
   // write paths are driven by independent loops (this poll and
@@ -176,6 +190,19 @@ export class MidnightMonitor {
       wsPort: 3030,
       ...config,
     };
+    this.allowedCallers = new Set(
+      (config.callerAllowlist ?? []).map((address) =>
+        address.trim().replace(/^0x/i, '').toLowerCase()
+      )
+    );
+  }
+
+  /** Whether `callerAddress` is one this responder serves. */
+  private servesCaller(callerAddress: string): boolean {
+    if (this.allowedCallers.size === 0) return true;
+    return this.allowedCallers.has(
+      callerAddress.trim().replace(/^0x/i, '').toLowerCase()
+    );
   }
 
   async initialize(): Promise<void> {
@@ -207,6 +234,19 @@ export class MidnightMonitor {
     console.log(
       `MidnightMonitor: polling signet contract events at ${this.config.signetContractAddress}`
     );
+    if (this.allowedCallers.size > 0) {
+      console.log(
+        `MidnightMonitor: serving requests from ${this.allowedCallers.size}` +
+          ` allow-listed caller contract(s) ONLY: ${[...this.allowedCallers].join(', ')}.` +
+          ' Requests from any other caller are ignored without a response.'
+      );
+    } else {
+      console.warn(
+        'MidnightMonitor: no MIDNIGHT_CALLER_ALLOWLIST is set, so EVERY caller' +
+          ' notified on this signet contract will be served. That is fine on a' +
+          ' private stack and wrong on a shared one.'
+      );
+    }
     console.log('MidnightMonitor: Initialized');
   }
 
@@ -475,6 +515,21 @@ export class MidnightMonitor {
       requestId,
       request: signetRequest,
     } of resolved) {
+      // The allow-list gate. Discovery is by notification event on a signet
+      // contract that may be SHARED, so without this the responder would sign
+      // and post a response for every request any party has ever notified
+      // there. The id is NOT re-armed: a caller we do not serve is not a
+      // transient failure, and re-arming would re-log it every cycle.
+      if (!this.servesCaller(callerAddress)) {
+        if (!this.refusedCallers.has(callerAddress)) {
+          this.refusedCallers.add(callerAddress);
+          console.log(
+            `MidnightMonitor: ignoring requests from contract ${callerAddress}` +
+              ' — not in MIDNIGHT_CALLER_ALLOWLIST. No response will be posted.'
+          );
+        }
+        continue;
+      }
       console.log(
         `MidnightMonitor: New request ${requestId} from contract ${callerAddress}`
       );
@@ -724,6 +779,7 @@ export class MidnightMonitor {
       responderWalletSeed:
         config.midnightWalletSeed ||
         '0000000000000000000000000000000000000000000000000000000000000001',
+      callerAllowlist: config.midnightCallerAllowlist,
     });
   }
 }

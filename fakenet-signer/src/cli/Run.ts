@@ -21,6 +21,9 @@ async function main() {
     midnightProofServerUrl: envConfig.MIDNIGHT_PROOF_SERVER_URL,
     midnightSignetContractAddress: envConfig.MIDNIGHT_SIGNET_CONTRACT_ADDRESS,
     midnightWalletSeed: envConfig.MIDNIGHT_WALLET_SEED,
+    midnightCallerAllowlist: envConfig.MIDNIGHT_CALLER_ALLOWLIST?.split(',')
+      .map((address) => address.trim().replace(/^0x/i, '').toLowerCase())
+      .filter((address) => address.length > 0),
     responsesApiPort: envConfig.RESPONSES_API_PORT,
   };
 

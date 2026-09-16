@@ -31,6 +31,19 @@ export interface ServerConfig {
   midnightProofServerUrl?: string;
   midnightSignetContractAddress?: string;
   midnightWalletSeed?: string;
+  /**
+   * Contract addresses whose requests this responder will serve. EMPTY OR
+   * UNSET MEANS EVERY CALLER, which is upstream's behaviour and is correct on
+   * a private local stack whose signet contract only this run writes to.
+   *
+   * On a SHARED signet contract it is not: discovery is by notification event,
+   * so an unfiltered responder signs and posts a response for every request
+   * any party has ever notified on that contract — spending its own fees and
+   * putting foreign responses on somebody else's contract. Set this to the
+   * caller contracts you own. (00034 local patch; see the allow-list check in
+   * `MidnightMonitor.fetchAndProcessRequests`.)
+   */
+  midnightCallerAllowlist?: string[];
   /** TCP port of the public /responses/{requestId} helper API (default 3040). */
   responsesApiPort?: number;
 }
@@ -75,6 +88,7 @@ export const serverConfigSchema = z
     midnightProofServerUrl: z.string().optional(),
     midnightSignetContractAddress: z.string().optional(),
     midnightWalletSeed: z.string().optional(),
+    midnightCallerAllowlist: z.array(z.string()).optional(),
     responsesApiPort: z.number().int().positive().optional(),
   })
   .superRefine((config, ctx) => {
