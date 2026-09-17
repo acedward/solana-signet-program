@@ -45,6 +45,9 @@ const envSchema = z
     MIDNIGHT_PROOF_SERVER_URL: z.string().url().optional(),
     MIDNIGHT_SIGNET_CONTRACT_ADDRESS: z.string().optional(),
     MIDNIGHT_WALLET_SEED: z.string().optional(),
+    // Comma-separated caller contract addresses whose requests this responder
+    // serves. Unset = every caller (upstream behaviour). 00034 local patch.
+    MIDNIGHT_CALLER_ALLOWLIST: z.string().optional(),
     // TCP port of the public /responses/{requestId} helper API.
     RESPONSES_API_PORT: z.coerce.number().int().positive().optional(),
   })
@@ -94,6 +97,9 @@ function validateEnv(): EnvConfig {
       MIDNIGHT_SIGNET_CONTRACT_ADDRESS:
         process.env.MIDNIGHT_SIGNET_CONTRACT_ADDRESS,
       MIDNIGHT_WALLET_SEED: process.env.MIDNIGHT_WALLET_SEED,
+      MIDNIGHT_CALLER_ALLOWLIST: nonEmpty(
+        process.env.MIDNIGHT_CALLER_ALLOWLIST
+      ),
       RESPONSES_API_PORT: nonEmpty(process.env.RESPONSES_API_PORT),
     });
 
